@@ -250,6 +250,7 @@ class NNTagger(object):
         print("read training data",file=sys.stderr)
 
         nb_tasks = len( list_folders_name )
+        # TODO(kk): Start by trying to print this.
 
         train_X, train_Y, task_labels, w2i, c2i, task2t2i = self.get_train_data(list_folders_name)
 
@@ -318,7 +319,9 @@ class NNTagger(object):
                     output = self.predict(word_indices, char_indices, task_of_instance, train=True)
                     total_tagged += len(word_indices)
 
-                    loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)])
+                    loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)]) 
+                    # TODO(kk): loss for MRI
+                    # batch_loss = dn.pickneglogsoftmax_batch(h, step_word_ids)
                     batch.append(loss1)
                     if len(batch) == minibatch_size:
                         loss = dynet.esum(batch)
@@ -429,6 +432,7 @@ class NNTagger(object):
         for task_id in self.tasks_ids:
             task_num_labels= len(self.task2tag2idx[task_id])
             output_layers_dict[task_id] = FFSequencePredictor(Layer(self.model, self.h_dim*2, task_num_labels, dynet.softmax, mlp=self.mlp, mlp_activation=self.activation_mlp))
+            # TODO(kk): add the decoder here
 
         char_rnn = BiRNNSequencePredictor(self.builder(1, self.c_in_dim, self.c_in_dim, self.model),
                                           self.builder(1, self.c_in_dim, self.c_in_dim, self.model))
@@ -530,9 +534,10 @@ class NNTagger(object):
                 backward_sequence = [self.activation(s) for s in backward_sequence]
 
             if i == output_expected_at_layer:
-                output_predictor = self.predictors["output_layers_dict"][task_id] 
+                output_predictor = self.predictors["output_layers_dict"][task_id] # TODO(kk): This should be the decoder (for the respective layer, check in the running code)
                 concat_layer = [dynet.concatenate([f, b]) for f, b in zip(forward_sequence,reversed(backward_sequence))]
 
+                # TODO(kk) :  s = dec_lstm.initial_state().add_input(dy.concatenate([dy.vecInput(STATE_SIZE*2), last_output_embeddings]))
                 if train and self.noise_sigma > 0.0:
                     concat_layer = [dynet.noise(fe,self.noise_sigma) for fe in concat_layer]
                 output = output_predictor.predict_sequence(concat_layer)
@@ -593,6 +598,7 @@ class NNTagger(object):
         transform training data to features (word indices)
         map tags to integers
         """
+        # TODO(kk): add the MRI task data here
         X = []
         Y = []
         task_labels = [] # keeps track of where instances come from "task1" or "task2"..
@@ -600,8 +606,8 @@ class NNTagger(object):
 
         # word 2 indices and tag 2 indices
         w2i = {} # word to index
-        c2i = {} # char to index
-        task2tag2idx = {} # id of the task -> tag2idx
+        c2i = {} # char to index, TODO(kk): we just need this
+        task2tag2idx = {} # id of the task -> tag2idx #TODO(kk): figure out if those are the labels
 
         w2i["_UNK"] = 0  # unk word / OOV
         c2i["_UNK"] = 0  # unk char
