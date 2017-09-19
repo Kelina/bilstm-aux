@@ -16,7 +16,7 @@ import pickle
 import dynet
 import codecs
 from collections import Counter
-from lib.mnnl import FFSequencePredictor, Layer, RNNSequencePredictor, BiRNNSequencePredictor
+from lib.mnnl import FFSequencePredictor, Layer, RNNSequencePredictor, BiRNNSequencePredictor, Decoder
 from lib.mio import read_any_data_file, load_embeddings_file
 from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
 
@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--learning-rate", help="learning rate [0: use default]", default=0, type=float) # see: http://dynet.readthedocs.io/en/latest/optimizers.html
     parser.add_argument("--patience", help="patience [default: -1=not used], requires specification of a dev set with --dev", required=False, default=-1, type=int)
     parser.add_argument("--word-dropout-rate", help="word dropout rate [default: 0.25], if 0=disabled, recommended: 0.25 (Kipperwasser & Goldberg, 2016)", required=False, default=0.25, type=float)
+    parser.add_argument("--task_types", nargs='*', help="the types of the tasks [original or POS]", required=False, default=['original', 'mri']) 
 
     parser.add_argument("--dynet-seed", help="random seed for dynet (needs to be first argument!)", required=False, type=int)
     parser.add_argument("--dynet-mem", help="memory for dynet (needs to be first argument!)", required=False, type=int)
@@ -98,6 +99,7 @@ def main():
                               args.c_in_dim,
                               args.h_layers,
                               args.pred_layer,
+                              args.task_types,
                               embeds_file=args.embeds,
                               activation=ACTIVATION_MAP[args.ac],
                               mlp=args.mlp,
@@ -208,13 +210,14 @@ def save(nntagger, model_path):
 
 class NNTagger(object):
 
-    def __init__(self,in_dim,h_dim,c_in_dim,h_layers,pred_layer,embeds_file=None,activation=ACTIVATION_MAP["tanh"],mlp=0,activation_mlp=ACTIVATION_MAP["rectify"],
+    def __init__(self,in_dim,h_dim,c_in_dim,h_layers,pred_layer,task_types,embeds_file=None,activation=ACTIVATION_MAP["tanh"],mlp=0,activation_mlp=ACTIVATION_MAP["rectify"],
                  backprob_embeds=True,noise_sigma=0.1, tasks_ids=[],initializer=INITIALIZER_MAP["glorot"], builder=BUILDERS["lstmc"]):
         self.w2i = {}  # word to index mapping
         self.c2i = {}  # char to index mapping
         self.tasks_ids = tasks_ids # list of names for each task
         self.task2tag2idx = {} # need one dictionary per task
         self.pred_layer = [int(layer) for layer in pred_layer] # at which layer to predict each task
+        self.task_types = task_types
         self.model = dynet.ParameterCollection() #init model
         self.in_dim = in_dim
         self.h_dim = h_dim
@@ -227,6 +230,7 @@ class NNTagger(object):
         self.predictors = {"inner": [], "output_layers_dict": {}, "task_expected_at": {} } # the inner layers and predictors
         self.wembeds = None # lookup: embeddings for words
         self.cembeds = None # lookup: embeddings for characters
+        self.dec_cembeds = None # lookup: embeddings for characters in the decoder
         self.embeds_file = embeds_file
         self.backprob_embeds = backprob_embeds
         self.initializer = initializer
@@ -268,7 +272,7 @@ class NNTagger(object):
                 widCount.update([w for w in sentence])
 
         if dev:
-            dev_X, dev_Y, org_X, org_Y, dev_task_labels = self.get_data_as_indices(dev, "task0")
+            dev_X, dev_Y, org_X, org_Y, dev_task_labels = self.get_data_as_indices(dev, "task0") # TODO(kk): adapt this for MRI
 
         # init lookup parameters and define graph
         print("build graph",file=sys.stderr)
@@ -278,8 +282,8 @@ class NNTagger(object):
         
         assert(nb_tasks==len(self.pred_layer))
         
-        self.predictors, self.char_rnn, self.wembeds, self.cembeds = self.build_computation_graph(num_words, num_chars)
-        exit()
+        self.predictors, self.char_rnn, self.wembeds, self.cembeds, self.dec_cembeds = self.build_computation_graph(num_words, num_chars)
+
         if self.backprob_embeds == False:
             ## disable backprob into embeds (default: True)
             self.wembeds.set_updated(False)
@@ -301,14 +305,13 @@ class NNTagger(object):
             print('Using early stopping with patience of %d...' % patience)
 
         batch = []
-
+        
         for iter in range(num_iterations):
 
             total_loss=0.0
             total_tagged=0.0
             random.shuffle(train_data)
             for ((word_indices,char_indices),y, task_of_instance) in train_data:
-
                 if word_dropout_rate > 0.0:
                     word_indices = [self.w2i["_UNK"] if
                                         (random.random() > (widCount.get(w)/(word_dropout_rate+widCount.get(w))))
@@ -316,10 +319,14 @@ class NNTagger(object):
 
                 if minibatch_size > 1:
                     # accumulate instances for minibatch update
-                    output = self.predict(word_indices, char_indices, task_of_instance, train=True)
-                    total_tagged += len(word_indices)
+                    if self.task_types[int(task_of_instance.split('task')[1])] == 'mri':
+                      loss1 = self.predict_mri(word_indices, char_indices, y, task_of_instance, train=True)
+                      total_tagged += 1
+                    else:
+                      output = self.predict(word_indices, char_indices, task_of_instance, train=True)
+                      total_tagged += len(word_indices)
+                      loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)]) 
 
-                    loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)]) 
                     # TODO(kk): loss for MRI
                     # batch_loss = dn.pickneglogsoftmax_batch(h, step_word_ids)
                     batch.append(loss1)
@@ -332,19 +339,31 @@ class NNTagger(object):
                         batch = []
                 else:
                     dynet.renew_cg() # new graph per item
-                    output = self.predict(word_indices, char_indices, task_of_instance, train=True)
-                    total_tagged += len(word_indices)
 
-                    loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)])
+                    if self.task_types[int(task_of_instance.split('task')[1])] == 'mri':
+                      # TODO(kk): this is not implemented. do the predict_mri function first
+                      #print(char_indices)
+                      #exit()
+                      y = y[0]
+                      #continue
+                      #print('Entering dangerous area...')
+                      loss1 = self.predict_mri(word_indices, char_indices, y, task_of_instance, train=True)
+                      #print('...finally left it!')
+                      total_tagged += 1
+                      #exit()
+                    else:
+                      output = self.predict(word_indices, char_indices, task_of_instance, train=True)
+                      total_tagged += len(word_indices)
+                      loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)])
+
                     lv = loss1.value()
                     total_loss += lv
 
                     loss1.backward()
                     trainer.update()
 
-
             print("iter {2} {0:>12}: {1:.2f}".format("total loss",total_loss/total_tagged,iter), file=sys.stderr)
-            
+
             if dev:
                 # evaluate after every epoch
                 correct, total = self.evaluate(dev_X, dev_Y, org_X, org_Y, dev_task_labels)
@@ -397,6 +416,7 @@ class NNTagger(object):
         cembeds = None
         if self.c_in_dim > 0:
             cembeds = self.model.add_lookup_parameters((num_chars, self.c_in_dim), init=self.initializer)
+            dec_cembeds = self.model.add_lookup_parameters((num_chars, self.c_in_dim), init=self.initializer)
                
 
         # make it more flexible to add number of layers as specified by parameter
@@ -430,19 +450,27 @@ class NNTagger(object):
 
         # store at which layer to predict task
         for task_id in self.tasks_ids:
-            task_num_labels= len(self.task2tag2idx[task_id])
-            output_layers_dict[task_id] = FFSequencePredictor(Layer(self.model, self.h_dim*2, task_num_labels, dynet.softmax, mlp=self.mlp, mlp_activation=self.activation_mlp))
-            # TODO(kk): add the decoder here
+            if self.task_types[int(task_id.split('task')[1])] != 'mri':
+              print('[build_computation_graph] building FFSequencePredictor output layer for task ' + str(task_id))
+              task_num_labels= len(self.task2tag2idx[task_id])
+              output_layers_dict[task_id] = FFSequencePredictor(Layer(self.model, self.h_dim*2, task_num_labels, dynet.softmax, mlp=self.mlp, mlp_activation=self.activation_mlp))
 
-        char_rnn = BiRNNSequencePredictor(self.builder(1, self.c_in_dim, self.c_in_dim, self.model),
+        char_rnn = BiRNNSequencePredictor(self.builder(1, self.c_in_dim, self.c_in_dim, self.model), # TODO(kk): ask Barabara why both is self.c_in_cim
                                           self.builder(1, self.c_in_dim, self.c_in_dim, self.model))
 
+        # TODO(kk): check for setting the hidden dimension, maybe make it task dependent?
+        for task_id in self.tasks_ids:
+            if self.task_types[int(task_id.split('task')[1])] == 'mri':
+              print('[build_computation_graph] building Decoder output layer for task ' + str(task_id))
+              task_num_labels= len(self.task2tag2idx[task_id])
+              output_layers_dict[task_id] = Decoder(self.model, self.builder(1, self.c_in_dim, self.h_dim, self.model), task_num_labels, self.h_dim)
+     
         predictors = {}
         predictors["inner"] = layers
         predictors["output_layers_dict"] = output_layers_dict
         predictors["task_expected_at"] = task_expected_at
 
-        return predictors, char_rnn, wembeds, cembeds
+        return predictors, char_rnn, wembeds, cembeds, dec_cembeds
 
     def get_features(self, words):
         """
@@ -486,6 +514,77 @@ class NNTagger(object):
             task_labels.append( task )
         return X, Y, org_X, org_Y, task_labels
 
+    def predict_mri(self, word_indices, char_indices, tag_indices, task_id, train=False):
+        """
+        predict tags for a sentence represented as char+word embeddings
+        ...overall here this means produce the target inflected form
+        """
+
+        # word embeddings - this is one dummy embedding in the case of MRI
+        # TODO(kk): find out if we need this!
+        wfeatures = [self.wembeds[w] for w in word_indices]
+
+        # char embeddings
+        if self.c_in_dim > 0:
+            char_emb = []
+            rev_char_emb = []
+            # get representation for words
+            for chars_of_token in char_indices:
+                char_feats = [self.cembeds[c] for c in chars_of_token]
+                # use last state as word representation
+                f_char, b_char = self.char_rnn.predict_sequence(char_feats, char_feats)
+                last_state = f_char[-1]
+                rev_last_state = b_char[-1]
+                char_emb.append(last_state)
+                rev_char_emb.append(rev_last_state)
+
+            word_from_chars = [dynet.concatenate([c,rev_c]) for c,rev_c in zip(char_emb,rev_char_emb)]
+        else:
+            print('[predict_mri] ERROR: This should not have happened!')
+            exit()
+        
+        if train: # only do at training time
+            word_from_chars = [dynet.noise(wfc,self.noise_sigma) for wfc in word_from_chars]
+
+        output_predictor = self.predictors["output_layers_dict"][task_id]
+        #print(output_predictor)
+        output = output_predictor.get_loss(word_from_chars, tag_indices, self.dec_cembeds)
+        return output
+        exit()
+       
+        # TODO(kk): we might only need the decoder here instead of all the following
+        output_expected_at_layer = self.predictors["task_expected_at"][task_id]
+        output_expected_at_layer -=1
+
+        # go through layers
+        # input is now the embedding of tags + chars
+        prev = features
+        prev_rev = features
+        num_layers = self.h_layers
+
+        for i in range(0,num_layers):
+            predictor = self.predictors["inner"][i]
+            forward_sequence, backward_sequence = predictor.predict_sequence(prev, prev_rev)        
+            if i > 0 and self.activation:
+                # activation between LSTM layers
+                forward_sequence = [self.activation(s) for s in forward_sequence]
+                backward_sequence = [self.activation(s) for s in backward_sequence]
+
+            if i == output_expected_at_layer:
+                output_predictor = self.predictors["output_layers_dict"][task_id] # TODO(kk): This should be the decoder (for the respective layer, check in the running code)
+                concat_layer = [dynet.concatenate([f, b]) for f, b in zip(forward_sequence,reversed(backward_sequence))]
+
+                # TODO(kk) :  s = dec_lstm.initial_state().add_input(dy.concatenate([dy.vecInput(STATE_SIZE*2), last_output_embeddings]))
+                if train and self.noise_sigma > 0.0:
+                    concat_layer = [dynet.noise(fe,self.noise_sigma) for fe in concat_layer]
+                output = output_predictor.predict_sequence(concat_layer)
+                return output
+
+            prev = forward_sequence
+            prev_rev = backward_sequence 
+
+        raise Exception("oops should not be here")
+        return None
 
     def predict(self, word_indices, char_indices, task_id, train=False):
         """
@@ -638,7 +737,7 @@ class NNTagger(object):
                 #print(words)
                 #print('orig tags:')
                 #print(tags)
-                #exit()  
+
                 num_sentences += 1
                 instance_word_indices = [] #sequence of word indices
                 instance_char_indices = [] #sequence of char indices 

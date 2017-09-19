@@ -46,7 +46,40 @@ class BiRNNSequencePredictor(SequencePredictor):
         forward_sequence = f_init.transduce(f_inputs)
         backward_sequence = b_init.transduce(reversed(b_inputs))
         return forward_sequence, backward_sequence 
-        
+       
+# TODO(kk): Figure out if "SequencePredictor" is needed.
+class Decoder(SequencePredictor):
+    def __init__(self, model, rnn_builder, out_dim, hidden_dim):
+        """
+        rnn_builder: a LSTMBuilder/SimpleRNNBuilder or GRU builder object
+        """
+        self.builder = rnn_builder
+        self.R = model.add_parameters((out_dim, hidden_dim)) # first: output dimension (number "tags"), second: hidden dimension (2*len of char rnn output))
+        self.b = model.add_parameters((out_dim))
+      
+    # set the initial state here
+    # TODO(kk): check if this should be used
+    def predict_sequence(self, inputs, initial_s):
+        s_init = self.builder.initial_state(initial_s)
+        return s_init.transduce(inputs)
+    
+    # TODO(kk): set the initial state here!
+    def get_loss(self, initial_s, sequence, cembeds):
+        # setup the sentence
+        dynet.renew_cg()
+        s0 = self.builder.initial_state()
+
+        R = dynet.parameter(self.R)
+        bias = dynet.parameter(self.b)
+        s = s0
+        loss = []
+        for char,next_char in zip(sequence,sequence[1:]):
+            s = s.add_input(cembeds[char])
+            probs = dynet.softmax(R*s.output() + bias)
+            loss.append( -dynet.log(dynet.pick(probs,next_char)) )
+        loss = dynet.esum(loss)
+        return loss
+
 
 class Layer:
     """ Class for affine layer transformation or two-layer MLP """
