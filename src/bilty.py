@@ -20,9 +20,12 @@ from lib.mnnl import FFSequencePredictor, Layer, RNNSequencePredictor, BiRNNSequ
 from lib.mio import read_any_data_file, load_embeddings_file
 from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
 
+# TODO(kk): dev set for MRI (done)
+# TODO(kk): produce human-readable output for MRI dev
 # TODO(kk): save and load model
-# TODO(kk): dev set for MRI
 # TODO(kk): use initial state instead of input to every step of the decoder
+# TODO(kk): make task type clean
+# TODO(kk): check hyperparameters for MRI
 
 def main():
     parser = argparse.ArgumentParser(description="""Run the NN tagger""")
@@ -370,7 +373,7 @@ class NNTagger(object):
 
             if dev:
                 # evaluate after every epoch
-                correct, total = self.evaluate(dev_X, dev_Y, org_X, org_Y, dev_task_labels)
+                correct, total = self.evaluate(dev_X, dev_Y, org_X, org_Y, dev_task_labels) # org = original
                 val_accuracy = correct/total
                 print("\ndev accuracy: %.4f" % (val_accuracy), file=sys.stderr)
 
@@ -476,20 +479,17 @@ class NNTagger(object):
 
         return predictors, char_rnn, wembeds, cembeds, dec_cembeds
 
-    def get_features(self, words):
+    def get_features(self, words, task_type):
         """
         from a list of words, return the word and word char indices
         """
         word_indices = []
         word_char_indices = []
         for word in words:
-            if word in self.w2i:
-                word_indices.append(self.w2i[word])
-            else:
-                word_indices.append(self.w2i["_UNK"])
-
             if self.c_in_dim > 0:
                 chars_of_word = [self.c2i["<w>"]]
+                if task_type != 'mri':
+                    chars_of_word.append(self.c2i["OUT=POS"])
                 for char in word:
                     if char in self.c2i:
                         chars_of_word.append(self.c2i[char])
@@ -497,10 +497,18 @@ class NNTagger(object):
                         chars_of_word.append(self.c2i["_UNK"])
                 chars_of_word.append(self.c2i["</w>"])
                 word_char_indices.append(chars_of_word)
+
+            if task_type == 'mri':
+                word = 'mri-dummy'
+            if word in self.w2i:
+                word_indices.append(self.w2i[word])
+            else:
+                word_indices.append(self.w2i["_UNK"])
+
         return word_indices, word_char_indices
                                                                                                                                 
 
-    def get_data_as_indices(self, folder_name, task, raw=False):
+    def get_data_as_indices(self, folder_name, task_id, raw=False):
         """
         X = list of (word_indices, word_char_indices)
         Y = list of tag indices
@@ -508,14 +516,27 @@ class NNTagger(object):
         X, Y = [],[]
         org_X, org_Y = [], []
         task_labels = []
+        task_type = self.task_types[int(task_id.split('task')[1])]
         for (words, tags) in read_any_data_file(folder_name, raw=raw):
-            word_indices, word_char_indices = self.get_features(words)
-            tag_indices = [self.task2tag2idx[task].get(tag) for tag in tags]
+            word_indices, word_char_indices = self.get_features(words, task_type)
+            if task_type == 'mri':
+              tag_indices = []
+              for tag in tags:
+                subtags_of_tag = [self.task2tag2idx[task_id]["<w>"]]
+                for subtag in tag:
+                    if subtag not in self.task2tag2idx[task_id]:
+                        subtags_of_tag.append(self.task2tag2idx[task_id]["_UNK"])
+                    else:
+                        subtags_of_tag.append(self.task2tag2idx[task_id].get(subtag))
+                subtags_of_tag.append(self.task2tag2idx[task_id]["</w>"])
+                tag_indices.append(subtags_of_tag)
+            else:
+              tag_indices = [self.task2tag2idx[task_id].get(tag) for tag in tags]
             X.append((word_indices,word_char_indices))
             Y.append(tag_indices)
             org_X.append(words)
             org_Y.append(tags)
-            task_labels.append( task )
+            task_labels.append( task_id )
         return X, Y, org_X, org_Y, task_labels
 
     def predict_mri(self, word_indices, char_indices, tag_indices, task_id, train=False):
@@ -555,40 +576,11 @@ class NNTagger(object):
 
         output_predictor = self.predictors["output_layers_dict"][task_id]
         #print(output_predictor)
-        output = output_predictor.get_loss(word_from_chars, tag_indices, self.dec_cembeds)
+        if train:
+          output = output_predictor.get_loss(word_from_chars, tag_indices, self.dec_cembeds)
+        else:
+          output = output_predictor.generate(word_from_chars, self.dec_cembeds) # TODO(kk): implement this
         return output
-        exit()
-       
-        # TODO(kk): we might only need the decoder here instead of all the following
-        output_expected_at_layer = self.predictors["task_expected_at"][task_id]
-        output_expected_at_layer -=1
-
-        # go through layers
-        # input is now the embedding of tags + chars
-        prev = features
-        prev_rev = features
-        num_layers = self.h_layers
-
-        for i in range(0,num_layers):
-            predictor = self.predictors["inner"][i]
-            forward_sequence, backward_sequence = predictor.predict_sequence(prev, prev_rev)        
-            if i > 0 and self.activation:
-                # activation between LSTM layers
-                forward_sequence = [self.activation(s) for s in forward_sequence]
-                backward_sequence = [self.activation(s) for s in backward_sequence]
-
-            if i == output_expected_at_layer:
-                output_predictor = self.predictors["output_layers_dict"][task_id] # TODO(kk): This should be the decoder (for the respective layer, check in the running code)
-                concat_layer = [dynet.concatenate([f, b]) for f, b in zip(forward_sequence,reversed(backward_sequence))]
-
-                # TODO(kk) :  s = dec_lstm.initial_state().add_input(dy.concatenate([dy.vecInput(STATE_SIZE*2), last_output_embeddings]))
-                if train and self.noise_sigma > 0.0:
-                    concat_layer = [dynet.noise(fe,self.noise_sigma) for fe in concat_layer]
-                output = output_predictor.predict_sequence(concat_layer)
-                return output
-
-            prev = forward_sequence
-            prev_rev = backward_sequence 
 
         raise Exception("oops should not be here")
         return None
@@ -674,8 +666,13 @@ class NNTagger(object):
                 elif i%10==0:
                     sys.stderr.write('.')
 
-            output = self.predict(word_indices, word_char_indices, task_of_instance)
-            predicted_tag_indices = [np.argmax(o.value()) for o in output]  # logprobs to indices
+            task_type = self.task_types[int(task_of_instance.split('task')[1])]
+            if task_type == 'mri':
+              predicted_tag_indices = self.predict_mri(word_indices, word_char_indices, [], task_of_instance) # this calls with default: train=False
+            else:
+              output = self.predict(word_indices, word_char_indices, task_of_instance) # TODO(kk): adapt this for MRI
+              predicted_tag_indices = [np.argmax(o.value()) for o in output]  # logprobs to indices
+
             if output_predictions:
                 prediction = [i2t[idx] for idx in predicted_tag_indices]
 
@@ -689,9 +686,19 @@ class NNTagger(object):
                         print(u"{}\t{}\t{}".format(w, g, p))
                 print("")
 
-            correct += sum([1 for (predicted, gold) in zip(predicted_tag_indices, gold_tag_indices) if predicted == gold])
-            total += len(gold_tag_indices)
-
+            if task_type == 'mri':
+              total += 1
+              seems_good = False
+              if len(predicted_tag_indices) == len(gold_tag_indices[0]):
+                seems_good = True
+                for i in range(len(predicted_tag_indices)):
+                  if gold_tag_indices[0][i] != predicted_tag_indices[i]:
+                    seems_good == False
+              if seems_good:
+                correct += 1
+            else:
+              correct += sum([1 for (predicted, gold) in zip(predicted_tag_indices, gold_tag_indices) if predicted == gold])
+              total += len(gold_tag_indices)
         return correct, total
 
 

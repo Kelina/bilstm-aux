@@ -6,6 +6,7 @@ import dynet
 import numpy as np
 
 import sys
+import random
 
 ## NN classes
 class SequencePredictor:
@@ -80,6 +81,32 @@ class Decoder(SequencePredictor):
             loss.append( -dynet.log(dynet.pick(probs,next_char)) )
         loss = dynet.esum(loss)
         return loss
+
+    def generate(self, initial_s, cembeds, max_symbols=100):
+        def sample(probs):
+            rnd = random.random()
+            for i,p in enumerate(probs):
+                rnd -= p
+                if rnd <= 0: 
+                    break
+            return i
+
+        s0 = self.builder.initial_state()
+
+        R = dynet.parameter(self.R)
+        bias = dynet.parameter(self.b)
+        
+        s = s0.add_input(dynet.concatenate([cembeds[1], initial_s])) # 1 = idx of start of sequence symbol
+        out=[1]
+        while True:
+            probs = dynet.softmax(R*s.output() + bias)
+            probs = probs.vec_value()
+            next_char = sample(probs)
+            out.append(next_char)
+            if out[-1] == 2 or len(out) == max_symbols: # 2 = idx of end of sequence symbol
+                break 
+            s = s.add_input(dynet.concatenate([cembeds[next_char], initial_s]))
+        return out
 
 
 class Layer:
