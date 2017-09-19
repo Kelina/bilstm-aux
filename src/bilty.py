@@ -17,7 +17,7 @@ import dynet
 import codecs
 from collections import Counter
 from lib.mnnl import FFSequencePredictor, Layer, RNNSequencePredictor, BiRNNSequencePredictor
-from lib.mio import read_conll_file, load_embeddings_file
+from lib.mio import read_any_data_file, load_embeddings_file
 from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
 
 def main():
@@ -250,7 +250,7 @@ class NNTagger(object):
         print("read training data",file=sys.stderr)
 
         nb_tasks = len( list_folders_name )
-        # TODO(kk): Start by trying to print this.
+        print('number tasks: ' + str(nb_tasks))
 
         train_X, train_Y, task_labels, w2i, c2i, task2t2i = self.get_train_data(list_folders_name)
 
@@ -279,7 +279,7 @@ class NNTagger(object):
         assert(nb_tasks==len(self.pred_layer))
         
         self.predictors, self.char_rnn, self.wembeds, self.cembeds = self.build_computation_graph(num_words, num_chars)
-
+        exit()
         if self.backprob_embeds == False:
             ## disable backprob into embeds (default: True)
             self.wembeds.set_updated(False)
@@ -476,7 +476,7 @@ class NNTagger(object):
         X, Y = [],[]
         org_X, org_Y = [], []
         task_labels = []
-        for (words, tags) in read_conll_file(folder_name, raw=raw):
+        for (words, tags) in read_any_data_file(folder_name, raw=raw):
             word_indices, word_char_indices = self.get_features(words)
             tag_indices = [self.task2tag2idx[task].get(tag) for tag in tags]
             X.append((word_indices,word_char_indices))
@@ -616,13 +616,28 @@ class NNTagger(object):
         
         
         for i, folder_name in enumerate( list_folders_name ):
+            print('[get_train_data] loading data from ' + folder_name)
+            if 'mri' in folder_name:
+              task_type = 'mri'
+            else:
+              task_type = 'original'
             num_sentences=0
             num_tokens=0
             task_id = 'task'+str(i)
             self.tasks_ids.append( task_id )
+
             if task_id not in task2tag2idx:
                 task2tag2idx[task_id] = {}
-            for instance_idx, (words, tags) in enumerate(read_conll_file(folder_name)):
+            # Start and end of word symbol for output of mri.
+            if task_type == 'mri':
+              task2tag2idx[task_id]["<w>"] = 1
+              task2tag2idx[task_id]["</w>"] = 2
+            for instance_idx, (words, tags) in enumerate(read_any_data_file(folder_name)):
+                #print('orig words:')
+                #print(words)
+                #print('orig tags:')
+                #print(tags)
+                #exit()  
                 num_sentences += 1
                 instance_word_indices = [] #sequence of word indices
                 instance_char_indices = [] #sequence of char indices 
@@ -632,10 +647,6 @@ class NNTagger(object):
                     num_tokens += 1
 
                     # map words and tags to indices
-                    if word not in w2i:
-                        w2i[word] = len(w2i)
-                    instance_word_indices.append(w2i[word])
-
                     if self.c_in_dim > 0:
                         chars_of_word = [c2i["<w>"]]
                         for char in word:
@@ -644,18 +655,41 @@ class NNTagger(object):
                             chars_of_word.append(c2i[char])
                         chars_of_word.append(c2i["</w>"])
                         instance_char_indices.append(chars_of_word)
+
+                    if task_type == 'mri':
+                      word = 'mri-dummy'
+                    if word not in w2i:
+                        w2i[word] = len(w2i)
+                    instance_word_indices.append(w2i[word])
                             
-                    if tag not in task2tag2idx[task_id]:
+                    if task_type == 'mri':
+                      subtags_of_tag = [task2tag2idx[task_id]["<w>"]]
+                      for subtag in tag:
+                        if subtag not in task2tag2idx[task_id]:
+                          task2tag2idx[task_id][subtag]=len(task2tag2idx[task_id])
+                        subtags_of_tag.append(task2tag2idx[task_id].get(subtag))
+                      subtags_of_tag.append(task2tag2idx[task_id]["</w>"])
+                      instance_tags_indices.append(subtags_of_tag)
+                    else:
+                      if tag not in task2tag2idx[task_id]:
                         task2tag2idx[task_id][tag]=len(task2tag2idx[task_id])
 
-                    instance_tags_indices.append(task2tag2idx[task_id].get(tag))
+                      instance_tags_indices.append(task2tag2idx[task_id].get(tag))
 
                 X.append((instance_word_indices, instance_char_indices)) # list of word indices, for every word list of char indices
+                #print('words:')
+                #print(instance_word_indices)
+                #print('chars:')
+                #print(instance_char_indices)
+                #print('tags:')
+                #print(instance_tags_indices)
+                #exit()
+                
                 Y.append(instance_tags_indices)
                 task_labels.append(task_id)
 
             if num_sentences == 0 or num_tokens == 0:
-                sys.exit( "No data read from: "+folder_name )
+                sys.exit( "[get_train_data] No data read from: "+folder_name )
 
             print("TASK "+task_id+" "+folder_name, file=sys.stderr )
             print("%s sentences %s tokens" % (num_sentences, num_tokens), file=sys.stderr)

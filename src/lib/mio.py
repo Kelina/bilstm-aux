@@ -70,6 +70,64 @@ def read_conll_file(file_name, raw=False):
     if current_tags != [] and not raw:
         yield (current_words, current_tags)
 
+def read_any_data_file(file_name, raw=False):
+    """
+    read in conll file
+    word1    tag1
+    ...      ...
+    wordN    tagN
+
+    Sentences MUST be separated by newlines!
+
+    :param file_name: file to read in
+    :param raw: if raw text file (with one sentence per line) -- adds 'DUMMY' label
+    :return: generator of instances ((list of  words, list of tags) pairs)
+
+    """
+    current_words = []
+    current_tags = []
+    
+    if not 'mri' in file_name:
+      for line in codecs.open(file_name, encoding='utf-8'):
+        #line = line.strip()
+        line = line[:-1]
+
+        if line:
+            if raw:
+                current_words = line.split() ## simple splitting by space
+                current_tags = ['DUMMY' for _ in current_words]
+                yield (current_words, current_tags)
+
+            else:
+                if len(line.split("\t")) != 2:
+                    if len(line.split("\t")) == 1: # emtpy words in gimpel
+                        raise IOError("Issue with input file - doesn't have a tag or token?")
+                    else:
+                        print("erroneous line: {} (line number: {}) ".format(line), file=sys.stderr)
+                        exit()
+                else:
+                    word, tag = line.split('\t')
+                current_words.append(word)
+                current_tags.append(tag)
+
+        else:
+            if current_words and not raw: #skip emtpy lines
+                yield (current_words, current_tags)
+            current_words = []
+            current_tags = []
+
+    else: # this is for morphological reinflection; do LEMMATIZATION for now, because format of the data is this way and reinflection from the lemma would not help
+      for line in codecs.open(file_name, encoding='utf-8'):
+        lemma, form, tag = line.strip().split(u'\t')
+        
+        current_words = [[u'OUT=LEMMA'] + list(form)]
+        current_tags = [list(lemma)]
+        yield (current_words, current_tags)
+
+    # check for last one
+    if current_tags != [] and not raw:
+        yield (current_words, current_tags)
+
     
 if __name__=="__main__":
     allsents=[]
