@@ -66,7 +66,7 @@ class Decoder(SequencePredictor):
     # TODO(kk): set the initial state here!
     def get_loss(self, initial_s, sequence, cembeds):
         # setup the sentence
-        dynet.renew_cg()
+        #dynet.renew_cg()
         s0 = self.builder.initial_state()
 
         R = dynet.parameter(self.R)
@@ -74,7 +74,8 @@ class Decoder(SequencePredictor):
         s = s0
         loss = []
         for char,next_char in zip(sequence,sequence[1:]):
-            s = s.add_input(cembeds[char])
+            s = s.add_input(dynet.concatenate([cembeds[char], initial_s]))
+            #s = s.add_input(cembeds[char])
             probs = dynet.softmax(R*s.output() + bias)
             loss.append( -dynet.log(dynet.pick(probs,next_char)) )
         loss = dynet.esum(loss)

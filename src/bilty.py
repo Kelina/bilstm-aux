@@ -20,6 +20,10 @@ from lib.mnnl import FFSequencePredictor, Layer, RNNSequencePredictor, BiRNNSequ
 from lib.mio import read_any_data_file, load_embeddings_file
 from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
 
+# TODO(kk): save and load model
+# TODO(kk): dev set for MRI
+# TODO(kk): use initial state instead of input to every step of the decoder
+
 def main():
     parser = argparse.ArgumentParser(description="""Run the NN tagger""")
     parser.add_argument("--train", nargs='*', help="train folder for each task") # allow multiple train files, each asociated with a task = position in the list
@@ -463,7 +467,7 @@ class NNTagger(object):
             if self.task_types[int(task_id.split('task')[1])] == 'mri':
               print('[build_computation_graph] building Decoder output layer for task ' + str(task_id))
               task_num_labels= len(self.task2tag2idx[task_id])
-              output_layers_dict[task_id] = Decoder(self.model, self.builder(1, self.c_in_dim, self.h_dim, self.model), task_num_labels, self.h_dim)
+              output_layers_dict[task_id] = Decoder(self.model, self.builder(1, self.c_in_dim*3, self.h_dim, self.model), task_num_labels, self.h_dim)
      
         predictors = {}
         predictors["inner"] = layers
@@ -535,16 +539,19 @@ class NNTagger(object):
                 f_char, b_char = self.char_rnn.predict_sequence(char_feats, char_feats)
                 last_state = f_char[-1]
                 rev_last_state = b_char[-1]
-                char_emb.append(last_state)
-                rev_char_emb.append(rev_last_state)
+                #char_emb.append(last_state)
+                #rev_char_emb.append(rev_last_state)
 
-            word_from_chars = [dynet.concatenate([c,rev_c]) for c,rev_c in zip(char_emb,rev_char_emb)]
+            #word_from_chars = [dynet.concatenate([c,rev_c]) for c,rev_c in zip(char_emb,rev_char_emb)]
+            word_from_chars = dynet.concatenate([last_state, rev_last_state])
+            #print(type(word_from_chars))
+            #exit() 
         else:
             print('[predict_mri] ERROR: This should not have happened!')
             exit()
         
         if train: # only do at training time
-            word_from_chars = [dynet.noise(wfc,self.noise_sigma) for wfc in word_from_chars]
+            word_from_chars = dynet.noise(word_from_chars,self.noise_sigma)
 
         output_predictor = self.predictors["output_layers_dict"][task_id]
         #print(output_predictor)
