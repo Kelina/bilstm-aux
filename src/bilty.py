@@ -613,6 +613,7 @@ class NNTagger(object):
         c2i["_UNK"] = 0  # unk char
         c2i["<w>"] = 1   # word start
         c2i["</w>"] = 2  # word end index
+        c2i["OUT=POS"] = 3  # dummy tag for POS
         
         
         for i, folder_name in enumerate( list_folders_name ):
@@ -649,6 +650,8 @@ class NNTagger(object):
                     # map words and tags to indices
                     if self.c_in_dim > 0:
                         chars_of_word = [c2i["<w>"]]
+                        if task_type != 'mri':
+                          chars_of_word.append(c2i["OUT=POS"])
                         for char in word:
                             if char not in c2i:
                                 c2i[char] = len(c2i)
