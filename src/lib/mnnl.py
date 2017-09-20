@@ -96,14 +96,14 @@ class Decoder(SequencePredictor):
         R = dynet.parameter(self.R)
         bias = dynet.parameter(self.b)
         
-        s = s0.add_input(dynet.concatenate([cembeds[1], initial_s])) # 1 = idx of start of sequence symbol
-        out=[1]
+        s = s0.add_input(dynet.concatenate([cembeds[0], initial_s])) # 1 = idx of start of sequence symbol
+        out=[0]
         while True:
             probs = dynet.softmax(R*s.output() + bias)
             probs = probs.vec_value()
             next_char = sample(probs)
             out.append(next_char)
-            if out[-1] == 2 or len(out) == max_symbols: # 2 = idx of end of sequence symbol
+            if out[-1] == 1 or len(out) == max_symbols: # 2 = idx of end of sequence symbol
                 break 
             s = s.add_input(dynet.concatenate([cembeds[next_char], initial_s]))
         return out

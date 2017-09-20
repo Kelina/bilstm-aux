@@ -22,6 +22,7 @@ from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
 
 # TODO(kk): dev set for MRI (done)
 # TODO(kk): produce human-readable output for MRI dev
+# TODO(kk): tie embeddings together
 # TODO(kk): save and load model
 # TODO(kk): use initial state instead of input to every step of the decoder
 # TODO(kk): make task type clean
@@ -319,6 +320,7 @@ class NNTagger(object):
             total_tagged=0.0
             random.shuffle(train_data)
             for ((word_indices,char_indices),y, task_of_instance) in train_data:
+                # TODO(kk): make an option to print here what is needed
                 if word_dropout_rate > 0.0:
                     word_indices = [self.w2i["_UNK"] if
                                         (random.random() > (widCount.get(w)/(word_dropout_rate+widCount.get(w))))
@@ -334,8 +336,6 @@ class NNTagger(object):
                       total_tagged += len(word_indices)
                       loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)]) 
 
-                    # TODO(kk): loss for MRI
-                    # batch_loss = dn.pickneglogsoftmax_batch(h, step_word_ids)
                     batch.append(loss1)
                     if len(batch) == minibatch_size:
                         loss = dynet.esum(batch)
@@ -348,16 +348,9 @@ class NNTagger(object):
                     dynet.renew_cg() # new graph per item
 
                     if self.task_types[int(task_of_instance.split('task')[1])] == 'mri':
-                      # TODO(kk): this is not implemented. do the predict_mri function first
-                      #print(char_indices)
-                      #exit()
                       y = y[0]
-                      #continue
-                      #print('Entering dangerous area...')
                       loss1 = self.predict_mri(word_indices, char_indices, y, task_of_instance, train=True)
-                      #print('...finally left it!')
                       total_tagged += 1
-                      #exit()
                     else:
                       output = self.predict(word_indices, char_indices, task_of_instance, train=True)
                       total_tagged += len(word_indices)
@@ -656,6 +649,7 @@ class NNTagger(object):
 
         if output_predictions != None:
             i2w = {self.w2i[w] : w for w in self.w2i.keys()}
+            i2c = {self.c2i[c] : c for c in self.c2i.keys()}
             task_id = task_labels[0] # get first
             i2t = {self.task2tag2idx[task_id][t] : t for t in self.task2tag2idx[task_id].keys()}
 
@@ -674,16 +668,34 @@ class NNTagger(object):
               predicted_tag_indices = [np.argmax(o.value()) for o in output]  # logprobs to indices
 
             if output_predictions:
-                prediction = [i2t[idx] for idx in predicted_tag_indices]
+                if task_type == 'mri':
+                    prediction = [[i2t[idx] for idx in predicted_tag_indices]]
+                else:
+                    prediction = [i2t[idx] for idx in predicted_tag_indices]
+              
+                #words = org_X[i]
+                #gold = org_Y[i]
+                words = [i2w[w] for w in word_indices]
+                all_chars = []
+                for word in word_char_indices:
+                    all_chars.append([i2c[c] for c in word])
+                if task_type == 'mri':
+                    gold = [[i2t[idx] for idx in gold_tag_indices[0]]]
+                else:
+                    gold = [i2t[idx] for idx in gold_tag_indices]
 
-                words = org_X[i]
-                gold = org_Y[i]
-
-                for w,g,p in zip(words,gold,prediction):
+                for w,c,g,p in zip(words,all_chars,gold,prediction):
                     if raw:
                         print(u"{}\t{}".format(w, p)) # do not print DUMMY tag when --raw is on
                     else:
-                        print(u"{}\t{}\t{}".format(w, g, p))
+                        print('Input:')
+                        print(w)
+                        print(c)
+                        print('Gold:')
+                        print(g)
+                        print('Predicted:')
+                        print(p)
+                        #print(u"{}\t{}\t{}".format(w, g, p))
                 print("")
 
             if task_type == 'mri':
@@ -744,8 +756,8 @@ class NNTagger(object):
                 task2tag2idx[task_id] = {}
             # Start and end of word symbol for output of mri.
             if task_type == 'mri':
-              task2tag2idx[task_id]["<w>"] = 1
-              task2tag2idx[task_id]["</w>"] = 2
+              task2tag2idx[task_id]["<w>"] = 0
+              task2tag2idx[task_id]["</w>"] = 1
             for instance_idx, (words, tags) in enumerate(read_any_data_file(folder_name)):
                 #print('orig words:')
                 #print(words)
