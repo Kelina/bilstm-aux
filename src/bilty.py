@@ -35,7 +35,7 @@ def main():
     parser.add_argument("--model", help="load model from file", required=False)
     parser.add_argument("--iters", help="training iterations [default: 30]", required=False,type=int,default=30)
     parser.add_argument("--in_dim", help="input dimension [default: 64] (like Polyglot embeds)", required=False,type=int,default=64)
-    parser.add_argument("--c_in_dim", help="input dimension for character embeddings [default: 100]", required=False,type=int,default=100)
+    parser.add_argument("--c_in_dim", help="input dimension for character embeddings [default: 100]", required=False,type=int,default=300) # original:100
     parser.add_argument("--h_dim", help="hidden dimension [default: 100]", required=False,type=int,default=100)
     parser.add_argument("--h_layers", help="number of stacked LSTMs [default: 1 = no stacking]", required=False,type=int,default=1)
     parser.add_argument("--test", nargs='*', help="test file(s)", required=False) # should be in the same order/task as train
@@ -435,8 +435,8 @@ class NNTagger(object):
             if layer_num == 0:
                 if self.c_in_dim > 0:
                     # in_dim: size of each layer
-                    f_builder = self.builder(1, self.in_dim+self.c_in_dim*2, self.h_dim, self.model) 
-                    b_builder = self.builder(1, self.in_dim+self.c_in_dim*2, self.h_dim, self.model) 
+                    f_builder = self.builder(1, self.in_dim+self.h_dim*2, self.h_dim, self.model) 
+                    b_builder = self.builder(1, self.in_dim+self.h_dim*2, self.h_dim, self.model) 
                 else:
                     f_builder = self.builder(1, self.in_dim, self.h_dim, self.model)
                     b_builder = self.builder(1, self.in_dim, self.h_dim, self.model)
@@ -455,15 +455,18 @@ class NNTagger(object):
               task_num_labels= len(self.task2tag2idx[task_id])
               output_layers_dict[task_id] = FFSequencePredictor(Layer(self.model, self.h_dim*2, task_num_labels, dynet.softmax, mlp=self.mlp, mlp_activation=self.activation_mlp))
 
-        char_rnn = BiRNNSequencePredictor(self.builder(1, self.c_in_dim, self.c_in_dim, self.model), # TODO(kk): ask Barabara why both is self.c_in_cim
-                                          self.builder(1, self.c_in_dim, self.c_in_dim, self.model))
+        #char_rnn = BiRNNSequencePredictor(self.builder(1, self.c_in_dim, self.c_in_dim, self.model), # TODO(kk): ask Barabara why both is self.c_in_cim
+        #                                  self.builder(1, self.c_in_dim, self.c_in_dim, self.model))
+        char_rnn = BiRNNSequencePredictor(self.builder(1, self.c_in_dim, self.h_dim, self.model), # TODO(kk): ask Barabara why both is self.c_in_cim
+                                          self.builder(1, self.c_in_dim, self.h_dim, self.model))
 
         # TODO(kk): check for setting the hidden dimension, maybe make it task dependent?
         for task_id in self.tasks_ids:
             if self.task_types[int(task_id.split('task')[1])] == 'mri':
               print('[build_computation_graph] building Decoder output layer for task ' + str(task_id))
               task_num_labels= len(self.task2tag2idx[task_id])
-              output_layers_dict[task_id] = Decoder(self.model, self.builder(1, self.c_in_dim*3, self.h_dim, self.model), task_num_labels, self.h_dim)
+              #output_layers_dict[task_id] = Decoder(self.model, self.builder(1, self.c_in_dim*3, self.h_dim, self.model), task_num_labels, self.h_dim)
+              output_layers_dict[task_id] = Decoder(self.model, self.builder(1, self.c_in_dim+self.h_dim*2, self.h_dim, self.model), task_num_labels, self.h_dim)
      
         predictors = {}
         predictors["inner"] = layers
