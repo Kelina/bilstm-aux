@@ -21,12 +21,13 @@ from lib.mio import read_any_data_file, load_embeddings_file
 from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
 
 # TODO(kk): dev set for MRI (done)
-# TODO(kk): produce human-readable output for MRI dev
+# TODO(kk): produce human-readable output for MRI dev (done)
 # TODO(kk): tie embeddings together
 # TODO(kk): save and load model
-# TODO(kk): use initial state instead of input to every step of the decoder
+# TODO(kk): use initial state instead of input to every step of the decoder (not good; done and reverted)
 # TODO(kk): make task type clean
-# TODO(kk): check hyperparameters for MRI
+# TODO(kk): check hyperparameters for MRI (done)
+# TODO(kk): make option to use batches for MRI
 
 def main():
     parser = argparse.ArgumentParser(description="""Run the NN tagger""")
@@ -55,7 +56,7 @@ def main():
     parser.add_argument("--task_types", nargs='*', help="the types of the tasks [original or POS]", required=False, default=['original', 'mri']) 
 
     parser.add_argument("--dynet-seed", help="random seed for dynet (needs to be first argument!)", required=False, type=int)
-    parser.add_argument("--dynet-mem", help="memory for dynet (needs to be first argument!)", required=False, type=int)
+    parser.add_argument("--dynet-mem", help="memory for dynet (needs to be first argument!)", required=False, default=4000, type=int)
     parser.add_argument("--dynet-gpus", help="1 for GPU usage", default=0, type=int) # warning: non-deterministic results on GPU https://github.com/clab/dynet/issues/399
     parser.add_argument("--dynet-autobatch", help="if 1 enable autobatching", default=0, type=int)
     parser.add_argument("--minibatch-size", help="size of minibatch for autobatching (1=disabled)", default=1, type=int)
@@ -329,6 +330,7 @@ class NNTagger(object):
                 if minibatch_size > 1:
                     # accumulate instances for minibatch update
                     if self.task_types[int(task_of_instance.split('task')[1])] == 'mri':
+                      y = y[0]
                       loss1 = self.predict_mri(word_indices, char_indices, y, task_of_instance, train=True)
                       total_tagged += 1
                     else:
@@ -571,11 +573,11 @@ class NNTagger(object):
             word_from_chars = dynet.noise(word_from_chars,self.noise_sigma)
 
         output_predictor = self.predictors["output_layers_dict"][task_id]
-        #print(output_predictor)
+
         if train:
           output = output_predictor.get_loss(word_from_chars, tag_indices, self.dec_cembeds)
         else:
-          output = output_predictor.generate(word_from_chars, self.dec_cembeds) # TODO(kk): implement this
+          output = output_predictor.generate(word_from_chars, self.dec_cembeds)
         return output
 
         raise Exception("oops should not be here")

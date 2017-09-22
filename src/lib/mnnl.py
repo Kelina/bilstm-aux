@@ -64,7 +64,6 @@ class Decoder(SequencePredictor):
         s_init = self.builder.initial_state(initial_s)
         return s_init.transduce(inputs)
     
-    # TODO(kk): set the initial state here!
     def get_loss(self, initial_s, sequence, cembeds):
         # setup the sentence
         #dynet.renew_cg()
