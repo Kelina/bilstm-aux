@@ -90,7 +90,8 @@ class Decoder(SequencePredictor):
                     break
             return i
 
-        s0 = self.builder.initial_state([initial_s, initial_s])
+        #s0 = self.builder.initial_state([initial_s, initial_s])
+        s0 = self.builder.initial_state()
 
         R = dynet.parameter(self.R)
         bias = dynet.parameter(self.b)

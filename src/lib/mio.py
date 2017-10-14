@@ -119,7 +119,12 @@ def read_any_data_file(file_name, raw=False):
     else: # this is for morphological reinflection; do LEMMATIZATION for now, because format of the data is this way and reinflection from the lemma would not help
       for line in codecs.open(file_name, encoding='utf-8'):
         lemma, form, tag = line.strip().split(u'\t')
-        
+        lemma = u'@'.join(lemma.split(u' '))
+        form = u'@'.join(lemma.split(u' '))        
+
+        #if u'@' in form: # just a test
+        #   continue
+
         current_words = [[u'OUT=LEMMA'] + list(form)]
         current_tags = [list(lemma)]
         yield (current_words, current_tags)

@@ -169,12 +169,13 @@ def load(args):
     """
     load a model from file; specify the .model file, it assumes the *pickle file in the same location
     """
-    myparams = pickle.load(open(args.model+".pickle", "rb"))
+    myparams = pickle.load(open(args.model+".model.pickle", "rb"))
     tagger = NNTagger(myparams["in_dim"],
                       myparams["h_dim"],
                       myparams["c_in_dim"],
                       myparams["h_layers"],
                       myparams["pred_layer"],
+                      myparams["task_types"],
                       activation=myparams["activation"],
                       mlp=myparams["mlp"],
                       activation_mlp=myparams["activation_mlp"],
@@ -182,10 +183,10 @@ def load(args):
                       builder=myparams["builder"],
                       )
     tagger.set_indices(myparams["w2i"],myparams["c2i"],myparams["task2tag2idx"])
-    tagger.predictors, tagger.char_rnn, tagger.wembeds, tagger.cembeds = \
+    tagger.predictors, tagger.char_rnn, tagger.wembeds, tagger.cembeds, tagger.dec_cembeds = \
         tagger.build_computation_graph(myparams["num_words"],
                                        myparams["num_chars"])
-    tagger.model.populate(args.model)
+    tagger.model.populate(args.model + '.model')
     print("model loaded: {}".format(args.model), file=sys.stderr)
     return tagger
 
@@ -199,6 +200,7 @@ def save(nntagger, model_path):
     myparams = {"num_words": len(nntagger.w2i),
                 "num_chars": len(nntagger.c2i),
                 "tasks_ids": nntagger.tasks_ids,
+                "task_types": nntagger.task_types,
                 "w2i": nntagger.w2i,
                 "c2i": nntagger.c2i,
                 "task2tag2idx": nntagger.task2tag2idx,
