@@ -87,7 +87,7 @@ def read_any_data_file(file_name, raw=False):
     current_words = []
     current_tags = []
     
-    if not 'mri' in file_name:
+    if not 'mri' in file_name and not 'random' in file_name and not 'UniMorph' in file_name:
       for line in codecs.open(file_name, encoding='utf-8'):
         #line = line.strip()
         line = line[:-1]
@@ -119,14 +119,18 @@ def read_any_data_file(file_name, raw=False):
     else: # this is for morphological reinflection; do LEMMATIZATION for now, because format of the data is this way and reinflection from the lemma would not help
       for line in codecs.open(file_name, encoding='utf-8'):
         lemma, form, tag = line.strip().split(u'\t')
-        lemma = u'@'.join(lemma.split(u' '))
-        form = u'@'.join(lemma.split(u' '))        
+        lemma = u'@'.join(lemma.split(u' ')) # use this line for lemmatization
+        #lemma = u'@'.join(form.split(u' ')) # use this line for autoencoding
+        form = u'@'.join(form.split(u' '))        
 
         #if u'@' in form: # just a test
         #   continue
-
-        current_words = [[u'OUT=LEMMA'] + list(form)]
-        current_tags = [list(lemma)]
+        subtags = tag.split(u';')
+        current_words = []
+        for subtag in subtags:
+          current_words.append(u'OUT=' + subtag)
+        current_words += list(lemma)
+        current_tags = [list(form)]
         yield (current_words, current_tags)
 
     # check for last one

@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--initializer", help="initializer for embeddings (default: constant)", choices=INITIALIZER_MAP.keys(), default="constant")
     parser.add_argument("--builder", help="RNN builder (default: lstmc)", choices=BUILDERS.keys(), default="lstmc")
 
+    parser.add_argument("--autoencoding", help="if 1 do autoencoding instead of reinflection", default=0, type=int)
     args = parser.parse_args()
 
     if args.train:
@@ -73,6 +74,10 @@ def main():
             print("--pred_layer required!")
             exit()
     
+    if args.autoencoding == 1:
+        print(">>> Autoencoding (not doing reinflection) <<<")
+        # TODO: Implement the further path of this flag.
+
     if args.dynet_seed:
         print(">>> using seed: {} <<< ".format(args.dynet_seed), file=sys.stderr)
         np.random.seed(args.dynet_seed)
@@ -246,6 +251,8 @@ class NNTagger(object):
         self.backprob_embeds = backprob_embeds
         self.initializer = initializer
         self.char_rnn = None # biRNN for character input
+        #self.char_rnn_layer2 = None # a second biRNN for characters (if a second layer is wanted)
+        self.char_rnn_layers = 1 # should be 1 or 2
         self.builder = builder # default biRNN is an LSTM
 
 
@@ -291,8 +298,12 @@ class NNTagger(object):
         num_words = len(self.w2i)
         num_chars = len(self.c2i)
         
+        print('Number words: ' + str(num_words))
+        print('Number chars: ' + str(num_chars))
+        #exit()
         assert(nb_tasks==len(self.pred_layer))
         
+        #self.predictors, self.char_rnn, self.wembeds, self.cembeds, self.dec_cembeds, self.char_rnn_layer2 = self.build_computation_graph(num_words, num_chars)
         self.predictors, self.char_rnn, self.wembeds, self.cembeds, self.dec_cembeds = self.build_computation_graph(num_words, num_chars)
 
         if self.backprob_embeds == False:
@@ -464,6 +475,9 @@ class NNTagger(object):
         char_rnn = BiRNNSequencePredictor(self.builder(1, self.c_in_dim, self.h_dim, self.model), # TODO(kk): ask Barabara why both is self.c_in_cim
                                           self.builder(1, self.c_in_dim, self.h_dim, self.model))
 
+        #char_rnn_layer2 = BiRNNSequencePredictor(self.builder(1, self.h_dim, self.h_dim, self.model),
+        #                                         self.builder(1, self.h_dim, self.h_dim, self.model))
+
         # TODO(kk): check for setting the hidden dimension, maybe make it task dependent?
         for task_id in self.tasks_ids:
             if self.task_types[int(task_id.split('task')[1])] == 'mri':
@@ -477,7 +491,7 @@ class NNTagger(object):
         predictors["output_layers_dict"] = output_layers_dict
         predictors["task_expected_at"] = task_expected_at
 
-        return predictors, char_rnn, wembeds, cembeds, dec_cembeds
+        return predictors, char_rnn, wembeds, cembeds, dec_cembeds #, char_rnn_layer2
 
     def get_features(self, words, task_type):
         """
@@ -602,6 +616,8 @@ class NNTagger(object):
                 char_feats = [self.cembeds[c] for c in chars_of_token]
                 # use last state as word representation
                 f_char, b_char = self.char_rnn.predict_sequence(char_feats, char_feats)
+                if self.char_rnn_layers == 2:
+                  f_char, b_char = self.char_rnn_layer2.predict_sequence(f_char, b_char)
                 last_state = f_char[-1]
                 rev_last_state = b_char[-1]
                 char_emb.append(last_state)
@@ -750,7 +766,7 @@ class NNTagger(object):
         
         for i, folder_name in enumerate( list_folders_name ):
             print('[get_train_data] loading data from ' + folder_name)
-            if 'mri' in folder_name:
+            if 'mri' in folder_name or 'random' in folder_name or 'UniMorph' in folder_name: # TODO: clean this up and get the real type
               task_type = 'mri'
             else:
               task_type = 'original'
@@ -829,7 +845,8 @@ class NNTagger(object):
             print("TASK "+task_id+" "+folder_name, file=sys.stderr )
             print("%s sentences %s tokens" % (num_sentences, num_tokens), file=sys.stderr)
             print("%s w features, %s c features " % (len(w2i),len(c2i)), file=sys.stderr)
-
+        
+        #exit()
         assert(len(X)==len(Y))
         return X, Y, task_labels, w2i, c2i, task2tag2idx  #sequence of features, sequence of labels, necessary mappings
 
