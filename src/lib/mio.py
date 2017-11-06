@@ -70,7 +70,7 @@ def read_conll_file(file_name, raw=False):
     if current_tags != [] and not raw:
         yield (current_words, current_tags)
 
-def read_any_data_file(file_name, raw=False):
+def read_any_data_file(file_name, raw=False, autoencoding=0):
     """
     read in conll file
     word1    tag1
@@ -122,6 +122,10 @@ def read_any_data_file(file_name, raw=False):
         lemma = u'@'.join(lemma.split(u' ')) # use this line for lemmatization
         #lemma = u'@'.join(form.split(u' ')) # use this line for autoencoding
         form = u'@'.join(form.split(u' '))        
+
+        if autoencoding == 1:
+          form = lemma
+          tag = "AE"
 
         #if u'@' in form: # just a test
         #   continue

@@ -76,8 +76,7 @@ def main():
     
     if args.autoencoding == 1:
         print(">>> Autoencoding (not doing reinflection) <<<")
-        # TODO: Implement the further path of this flag.
-
+        
     if args.dynet_seed:
         print(">>> using seed: {} <<< ".format(args.dynet_seed), file=sys.stderr)
         np.random.seed(args.dynet_seed)
@@ -127,7 +126,7 @@ def main():
     if args.train and len( args.train ) != 0:
         tagger.fit(args.train, args.iters, args.trainer,
                    dev=args.dev, word_dropout_rate=args.word_dropout_rate,
-                   model_path=args.save, patience=args.patience, minibatch_size=args.minibatch_size)
+                   model_path=args.save, patience=args.patience, minibatch_size=args.minibatch_size, autoencoding=args.autoencoding)
         if args.save:
             save(tagger, args.save)
 
@@ -265,7 +264,7 @@ class NNTagger(object):
         self.w2i = w2i
         self.c2i = c2i
 
-    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0):
+    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0, autoencoding=0):
         """
         train the tagger
         """
@@ -274,7 +273,7 @@ class NNTagger(object):
         nb_tasks = len( list_folders_name )
         print('number tasks: ' + str(nb_tasks))
 
-        train_X, train_Y, task_labels, w2i, c2i, task2t2i = self.get_train_data(list_folders_name)
+        train_X, train_Y, task_labels, w2i, c2i, task2t2i = self.get_train_data(list_folders_name, autoencoding=0)
 
         ## after calling get_train_data we have self.tasks_ids
         self.task2layer = {task_id: out_layer for task_id, out_layer in zip(self.tasks_ids, self.pred_layer)}
@@ -290,7 +289,7 @@ class NNTagger(object):
                 widCount.update([w for w in sentence])
 
         if dev:
-            dev_X, dev_Y, org_X, org_Y, dev_task_labels = self.get_data_as_indices(dev, "task0") # TODO(kk): adapt this for MRI
+            dev_X, dev_Y, org_X, org_Y, dev_task_labels = self.get_data_as_indices(dev, "task0", autoencoding=autoencoding) # TODO(kk): adapt this for MRI
 
         # init lookup parameters and define graph
         print("build graph",file=sys.stderr)
@@ -522,7 +521,7 @@ class NNTagger(object):
         return word_indices, word_char_indices
                                                                                                                                 
 
-    def get_data_as_indices(self, folder_name, task_id, raw=False):
+    def get_data_as_indices(self, folder_name, task_id, raw=False, autoencoding=0):
         """
         X = list of (word_indices, word_char_indices)
         Y = list of tag indices
@@ -531,7 +530,7 @@ class NNTagger(object):
         org_X, org_Y = [], []
         task_labels = []
         task_type = self.task_types[int(task_id.split('task')[1])]
-        for (words, tags) in read_any_data_file(folder_name, raw=raw):
+        for (words, tags) in read_any_data_file(folder_name, raw=raw, autoencoding=autoencoding):
             word_indices, word_char_indices = self.get_features(words, task_type)
             if task_type == 'mri':
               tag_indices = []
@@ -737,7 +736,7 @@ class NNTagger(object):
         return correct, total
 
 
-    def get_train_data(self, list_folders_name):
+    def get_train_data(self, list_folders_name, autoencoding=0):
         """
         Get train data: read each train set (linked to a task)
 
@@ -781,7 +780,7 @@ class NNTagger(object):
             if task_type == 'mri':
               task2tag2idx[task_id]["<w>"] = 0
               task2tag2idx[task_id]["</w>"] = 1
-            for instance_idx, (words, tags) in enumerate(read_any_data_file(folder_name)):
+            for instance_idx, (words, tags) in enumerate(read_any_data_file(folder_name, autoencoding=autoencoding)):
                 #print('orig words:')
                 #print(words)
                 #print('orig tags:')
