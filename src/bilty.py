@@ -66,7 +66,7 @@ def main():
     parser.add_argument("--initializer", help="initializer for embeddings (default: constant)", choices=INITIALIZER_MAP.keys(), default="constant")
     parser.add_argument("--builder", help="RNN builder (default: lstmc)", choices=BUILDERS.keys(), default="lstmc")
 
-    parser.add_argument("--autoencoding", help="if 1 do autoencoding instead of reinflection", default=0, type=int)
+    parser.add_argument("--autoencoding", help="0: reinflection, 1: autoencoding", default=0, type=int)
     args = parser.parse_args()
 
     if args.train:
@@ -75,8 +75,10 @@ def main():
             exit()
     
     if args.autoencoding == 1:
-        print(">>> Autoencoding (not doing reinflection) <<<")
-        
+        print(">>> Autoencoding words (not doing reinflection) <<<")
+    elif args.autoencoding == 2:
+        print(">>> Autoencoding random strings (not doing reinflection) <<<")
+
     if args.dynet_seed:
         print(">>> using seed: {} <<< ".format(args.dynet_seed), file=sys.stderr)
         np.random.seed(args.dynet_seed)
