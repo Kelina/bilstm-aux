@@ -12,13 +12,18 @@ import time
 import sys
 import numpy as np
 import os
-import pickle
+import pickle, json
 import dynet
 import codecs
 from collections import Counter
 from lib.mnnl import FFSequencePredictor, Layer, RNNSequencePredictor, BiRNNSequencePredictor, Decoder
 from lib.mio import read_any_data_file, load_embeddings_file
 from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
+
+from sklearn.metrics import pairwise_distances
+from scipy.spatial.distance import cosine
+from sklearn.manifold import TSNE
+#import matplotlib.pyplot as plt
 
 # TODO(kk): dev set for MRI (done)
 # TODO(kk): produce human-readable output for MRI dev (done)
@@ -28,6 +33,45 @@ from lib.mmappers import TRAINER_MAP, ACTIVATION_MAP, INITIALIZER_MAP, BUILDERS
 # TODO(kk): make task type clean
 # TODO(kk): check hyperparameters for MRI (done)
 # TODO(kk): make option to use batches for MRI
+
+def t_sne(embeds, c2i, model_name):
+    i2c = {v: k for k, v in c2i.items()}
+    char_list = [i2c[k] for k in sorted(i2c.keys())]
+    print(i2c)
+    print(char_list)
+
+    time_start = time.time()
+    tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=300).fit_transform(embeds)
+    print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+    np.savetxt('tsnes/' + model_name + '.out', tsne)
+    json.dump(i2c, open('tsnes/' + model_name + '.dict.out','w'))
+    print(tsne.shape)
+
+    #plt.scatter(tsne[0], tsne[1], c=colors, cmap=plt.cm.rainbow)
+    #plt.title("t-SNE (%.2g sec)" % (t1 - t0))
+    #plt.axis('tight')
+    #plt.show()
+
+def analyze_embeds(tagger, model_name):
+    print(tagger)
+    cembeds = tagger.cembeds.as_array()
+    c2i = tagger.c2i
+    print(cembeds.shape)
+
+    t_sne(cembeds, c2i, model_name)
+
+    sim_out = 1-pairwise_distances(cembeds, metric="cosine")
+    print(sim_out)
+    average = [0, 0]
+    for i in range(sim_out.shape[0]):
+      for j in range(i):
+        average[0] += sim_out[i, j]
+        average[1] += 1
+    #average_sim = np.average(sim_out)
+    average_sim = average[0] / average[1]
+    print(average_sim)
+
+    exit()
 
 def main():
     parser = argparse.ArgumentParser(description="""Run the NN tagger""")
@@ -61,6 +105,7 @@ def main():
     parser.add_argument("--dynet-autobatch", help="if 1 enable autobatching", default=0, type=int)
     parser.add_argument("--minibatch-size", help="size of minibatch for autobatching (1=disabled)", default=1, type=int)
 
+    parser.add_argument("--conf_matrix", help="print confusion matrix", required=False, default=False)
     parser.add_argument("--save-embeds", help="save word embeddings file", required=False, default=None)
     parser.add_argument("--disable-backprob-embeds", help="disable backprob into embeddings (default is to update)", required=False, action="store_false", default=True)
     parser.add_argument("--initializer", help="initializer for embeddings (default: constant)", choices=INITIALIZER_MAP.keys(), default="constant")
@@ -108,6 +153,7 @@ def main():
     if args.model:
         print("loading model from file {}".format(args.model), file=sys.stderr)
         tagger = load(args)
+        #analyze_embeds(tagger, u'.'.join(args.model.split(u'/')[-2:]))
     else:
         tagger = NNTagger(args.in_dim,
                               args.h_dim,
@@ -149,11 +195,25 @@ def main():
             sys.stderr.write('\nTesting Task'+str(i)+'\n')
             sys.stderr.write('*******\n')
             test_X, test_Y, org_X, org_Y, task_labels = tagger.get_data_as_indices(test, "task"+str(i), raw=args.raw)
-            correct, total = tagger.evaluate(test_X, test_Y, org_X, org_Y, task_labels,
-                                             output_predictions=args.output, raw=args.raw)
+            correct, total, acc_per_token, conf_matrix, i2t  = tagger.evaluate(test_X, test_Y, org_X, org_Y, task_labels,
+                                                             output_predictions=args.output, raw=args.raw)
 
             if not args.raw:
                 print("\nTask%s test accuracy on %s items: %.4f" % (i, i+1, correct/total), file=sys.stderr)
+                if args.conf_matrix:
+                  matrix_out = ''
+                  for i in range(len(conf_matrix)): # row is gold
+                    correct = total = 0
+                    for j in range(len(conf_matrix[i])):  # column in prediction
+                      matrix_out += str(conf_matrix[i][j]) + u'\t'
+                      if i == j:
+                        correct += conf_matrix[i][j]
+                      total += conf_matrix[i][j]
+                    matrix_out += '\tcorrect: ' + str(correct) + '\ttotal: ' + str(total)
+                    matrix_out += '\n'
+                  print(matrix_out)
+                  print(i2t)
+                #print("\nTest accuracy per token: %.4f" % (acc_per_token), file=sys.stderr)
             print(("Done. Took {0:.2f} seconds.".format(time.time()-start)),file=sys.stderr)
             sys.stdout = stdout
     if args.train:
@@ -670,12 +730,18 @@ class NNTagger(object):
         """
         correct = 0
         total = 0.0
+        all_words = set()
+        total_per_token = 0.0
 
         if output_predictions != None:
             i2w = {self.w2i[w] : w for w in self.w2i.keys()}
             i2c = {self.c2i[c] : c for c in self.c2i.keys()}
-            task_id = task_labels[0] # get first
-            i2t = {self.task2tag2idx[task_id][t] : t for t in self.task2tag2idx[task_id].keys()}
+        task_id = task_labels[0] # get first
+        i2t = {self.task2tag2idx[task_id][t] : t for t in self.task2tag2idx[task_id].keys()}
+
+        conf_matrix = []
+        for i in range(len(i2t)):
+          conf_matrix.append([0] * len(i2t))
 
         for i, ((word_indices, word_char_indices), gold_tag_indices, task_of_instance) in enumerate(zip(test_X, test_Y, task_labels)):
             if verbose:
@@ -691,12 +757,26 @@ class NNTagger(object):
               output = self.predict(word_indices, word_char_indices, task_of_instance) # TODO(kk): adapt this for MRI
               predicted_tag_indices = [np.argmax(o.value()) for o in output]  # logprobs to indices
 
+            for k in range(len(word_char_indices)):
+              if u'*'.join([str(w) for w in word_char_indices[k]] + [str(gold_tag_indices[k])]) not in all_words and task_type != 'mri':
+                all_words.add(u'*'.join([str(w) for w in word_char_indices[k]] + [str(gold_tag_indices[k])]))
+                #print(all_words)
+                #exit()
+                if predicted_tag_indices[k] == gold_tag_indices[k]:
+                  total_per_token += 1 
+
             if output_predictions:
                 if task_type == 'mri':
                     prediction = [[i2t[idx] for idx in predicted_tag_indices]]
                 else:
                     prediction = [i2t[idx] for idx in predicted_tag_indices]
-              
+             
+                # Insert this in order to make it run. Not sure why we have None in the first place (kk).
+                i2t[None] = 'None' 
+                #print(predicted_tag_indices)
+                #print(prediction)
+                #print(gold_tag_indices)
+                #print('test')
                 #words = org_X[i]
                 #gold = org_Y[i]
                 words = [i2w[w] for w in word_indices]
@@ -712,14 +792,14 @@ class NNTagger(object):
                     if raw:
                         print(u"{}\t{}".format(w, p)) # do not print DUMMY tag when --raw is on
                     else:
-                        print('Input:')
-                        print(w)
-                        print(c)
-                        print('Gold:')
-                        print(g)
-                        print('Predicted:')
-                        print(p)
-                        #print(u"{}\t{}\t{}".format(w, g, p))
+                        #print('Input:')
+                        #print(w)
+                        #print(c)
+                        #print('Gold:')
+                        #print(g)
+                        #print('Predicted:')
+                        #print(p)
+                        print(u"{}\t{}\t(gold:) {}\t(guess:) {}".format(w, c, g, p))
                 print("")
 
             if task_type == 'mri':
@@ -735,7 +815,19 @@ class NNTagger(object):
             else:
               correct += sum([1 for (predicted, gold) in zip(predicted_tag_indices, gold_tag_indices) if predicted == gold])
               total += len(gold_tag_indices)
-        return correct, total
+              for i in range(len(gold_tag_indices)):
+                if (gold_tag_indices[i]) == None:
+                  #print("none")
+                  continue
+                #print(i)
+                #print(gold_tag_indices[i])
+                #print(predicted_tag_indices[i])
+                #print('')
+                conf_matrix[gold_tag_indices[i]][predicted_tag_indices[i]] += 1
+                #print(conf_matrix)
+            #print(conf_matrix)
+            #exit()
+        return correct, total, total_per_token / len(all_words), conf_matrix, i2t
 
 
     def get_train_data(self, list_folders_name, autoencoding=0):
