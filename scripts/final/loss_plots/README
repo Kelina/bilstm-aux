@@ -1,0 +1,3 @@
+Task 0 is always the main task, i.e., POS tagging.
+
+Task 1 is the respective auxiliary task.
