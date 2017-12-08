@@ -104,8 +104,10 @@ def main():
     parser.add_argument("--dynet-gpus", help="1 for GPU usage", default=0, type=int) # warning: non-deterministic results on GPU https://github.com/clab/dynet/issues/399
     parser.add_argument("--dynet-autobatch", help="if 1 enable autobatching", default=0, type=int)
     parser.add_argument("--minibatch-size", help="size of minibatch for autobatching (1=disabled)", default=1, type=int)
-
+    parser.add_argument("--dynet-devices", help="e.g., GPU:1", default=0)
+    
     parser.add_argument("--conf_matrix", help="print confusion matrix", required=False, default=False)
+    parser.add_argument("--loss", help="print loss at each step", required=False, default=False)
     parser.add_argument("--save-embeds", help="save word embeddings file", required=False, default=None)
     parser.add_argument("--disable-backprob-embeds", help="disable backprob into embeddings (default is to update)", required=False, action="store_false", default=True)
     parser.add_argument("--initializer", help="initializer for embeddings (default: constant)", choices=INITIALIZER_MAP.keys(), default="constant")
@@ -148,6 +150,10 @@ def main():
             if not os.path.exists(outdir):
                 os.makedirs(outdir)
 
+    print_loss = False
+    if args.loss:
+        print_loss = True
+    
     start = time.time()
 
     if args.model:
@@ -174,7 +180,7 @@ def main():
     if args.train and len( args.train ) != 0:
         tagger.fit(args.train, args.iters, args.trainer,
                    dev=args.dev, word_dropout_rate=args.word_dropout_rate,
-                   model_path=args.save, patience=args.patience, minibatch_size=args.minibatch_size, autoencoding=args.autoencoding)
+                   model_path=args.save, patience=args.patience, minibatch_size=args.minibatch_size, autoencoding=args.autoencoding, print_loss=print_loss)
         if args.save:
             save(tagger, args.save)
 
@@ -184,6 +190,13 @@ def main():
                 print("specify a model!")
                 sys.exit()
 
+        # NOTE: this is a hack
+        test_task = 0
+        for i in range(len(tagger.task_types)):
+          if tagger.task_types[i] == args.task_types[0]:
+            test_task = i
+        tagger.task_types[0] = args.task_types[0]  # task 0 is always used for testing for now
+        
         stdout = sys.stdout
         # One file per test ... 
         for i, test in enumerate( args.test ):
@@ -194,7 +207,7 @@ def main():
 
             sys.stderr.write('\nTesting Task'+str(i)+'\n')
             sys.stderr.write('*******\n')
-            test_X, test_Y, org_X, org_Y, task_labels = tagger.get_data_as_indices(test, "task"+str(i), raw=args.raw)
+            test_X, test_Y, org_X, org_Y, task_labels = tagger.get_data_as_indices(test, "task"+str(test_task), raw=args.raw)
             correct, total, acc_per_token, conf_matrix, i2t  = tagger.evaluate(test_X, test_Y, org_X, org_Y, task_labels,
                                                              output_predictions=args.output, raw=args.raw)
 
@@ -326,17 +339,27 @@ class NNTagger(object):
         self.w2i = w2i
         self.c2i = c2i
 
-    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0, autoencoding=0):
+    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0, autoencoding=0, print_loss=False):
         """
         train the tagger
         """
         print("read training data",file=sys.stderr)
+        
+        if print_loss:
+          losses_file = open(model_path + ".model" +".losses", "w")
+        losses = {}
 
         nb_tasks = len( list_folders_name )
         print('number tasks: ' + str(nb_tasks))
 
         train_X, train_Y, task_labels, w2i, c2i, task2t2i = self.get_train_data(list_folders_name, autoencoding=0)
-
+        #for i in range(40):
+        #  print(train_X[i])
+        #  print(train_Y[i])
+        #  print(task_labels[i])
+        #  print('')
+        #exit() 
+        
         ## after calling get_train_data we have self.tasks_ids
         self.task2layer = {task_id: out_layer for task_id, out_layer in zip(self.tasks_ids, self.pred_layer)}
         print("task2layer", self.task2layer, file=sys.stderr)
@@ -395,6 +418,9 @@ class NNTagger(object):
             total_tagged=0.0
             random.shuffle(train_data)
             for ((word_indices,char_indices),y, task_of_instance) in train_data:
+                if task_of_instance not in losses:
+                  losses[task_of_instance] = []
+                  losses[task_of_instance].append([0, 0])
                 # TODO(kk): make an option to print here what is needed
                 if word_dropout_rate > 0.0:
                     word_indices = [self.w2i["_UNK"] if
@@ -405,15 +431,21 @@ class NNTagger(object):
                     # accumulate instances for minibatch update
                     if self.task_types[int(task_of_instance.split('task')[1])] == 'mri':
                       y = y[0]
+                      #print('before loss:')
+                      #print(char_indices)
                       loss1 = self.predict_mri(word_indices, char_indices, y, task_of_instance, train=True)
+                      losses[task_of_instance][-1][0] += loss1.value()
                       total_tagged += 1
+                      losses[task_of_instance][-1][1] += 1
                     else:
                       output = self.predict(word_indices, char_indices, task_of_instance, train=True)
                       total_tagged += len(word_indices)
+                      losses[task_of_instance][-1][1] += len(word_indices)
                       loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)]) 
-
+                      losses[task_of_instance][-1][0] += loss1.value()
+                       
                     batch.append(loss1)
-                    if len(batch) == minibatch_size:
+                    if len(batch) == minibatch_size: # TODO: Think about this
                         loss = dynet.esum(batch)
                         total_loss += loss.value()
                         loss.backward()
@@ -427,16 +459,29 @@ class NNTagger(object):
                       y = y[0]
                       loss1 = self.predict_mri(word_indices, char_indices, y, task_of_instance, train=True)
                       total_tagged += 1
+                      losses[task_of_instance][-1][1] += 1
                     else:
                       output = self.predict(word_indices, char_indices, task_of_instance, train=True)
                       total_tagged += len(word_indices)
+                      losses[task_of_instance][-1][1] += len(word_indices)
                       loss1 = dynet.esum([self.pick_neg_log(pred,gold) for pred, gold in zip(output, y)])
 
                     lv = loss1.value()
                     total_loss += lv
+                    losses[task_of_instance][-1][0] += lv
 
                     loss1.backward()
                     trainer.update()
+
+            for task_id in sorted(losses):
+              losses[task_id][-1] = float(losses[task_id][-1][0]) / losses[task_id][-1][1] 
+            if print_loss:
+              for task_id in sorted(losses):
+                losses_file.write(task_id + ' - ' + str(losses[task_id][-1]) + '\t')
+              losses_file.write('\n')
+            for task_id in sorted(losses):
+              losses[task_id].append([0, 0])
+
 
             print("iter {2} {0:>12}: {1:.2f}".format("total loss",total_loss/total_tagged,iter), file=sys.stderr)
 
@@ -458,6 +503,12 @@ class NNTagger(object):
                     if epochs_no_improvement == patience:
                         print('No improvement for %d epochs. Early stopping...' % epochs_no_improvement, file=sys.stderr)
                         break
+ 
+        for task_id in sorted(losses):
+          losses[task_id] = losses[task_id][:-1]
+        if print_loss:
+          losses_file.close()
+          pickle.dump(losses, open(model_path + ".model"+".losses.pickle", "wb" ) )
 
 
     def build_computation_graph(self, num_words, num_chars):
@@ -558,9 +609,11 @@ class NNTagger(object):
         """
         from a list of words, return the word and word char indices
         """
+        #print('Testing for: ' + task_type)
         word_indices = []
         word_char_indices = []
         for word in words:
+            #print(word)
             if self.c_in_dim > 0:
                 chars_of_word = [self.c2i["<w>"]]
                 if task_type != 'mri':
@@ -612,6 +665,9 @@ class NNTagger(object):
             org_X.append(words)
             org_Y.append(tags)
             task_labels.append( task_id )
+        #print(X[:5])
+        #print(Y[:5])
+        #exit()
         return X, Y, org_X, org_Y, task_labels
 
     def predict_mri(self, word_indices, char_indices, tag_indices, task_id, train=False):
@@ -624,6 +680,8 @@ class NNTagger(object):
         # TODO(kk): find out if we need this!
         wfeatures = [self.wembeds[w] for w in word_indices]
 
+        #print(char_indices)
+        #print(tag_indices)
         # char embeddings
         if self.c_in_dim > 0:
             char_emb = []
@@ -637,7 +695,6 @@ class NNTagger(object):
                 rev_last_state = b_char[-1]
                 #char_emb.append(last_state)
                 #rev_char_emb.append(rev_last_state)
-
             #word_from_chars = [dynet.concatenate([c,rev_c]) for c,rev_c in zip(char_emb,rev_char_emb)]
             word_from_chars = dynet.concatenate([last_state, rev_last_state])
             #print(type(word_from_chars))
@@ -655,6 +712,8 @@ class NNTagger(object):
           output = output_predictor.get_loss(word_from_chars, tag_indices, self.dec_cembeds)
         else:
           output = output_predictor.generate(word_from_chars, self.dec_cembeds)
+          #print(output)
+          #exit()
         return output
 
         raise Exception("oops should not be here")
@@ -744,19 +803,28 @@ class NNTagger(object):
           conf_matrix.append([0] * len(i2t))
 
         for i, ((word_indices, word_char_indices), gold_tag_indices, task_of_instance) in enumerate(zip(test_X, test_Y, task_labels)):
+            task_type = self.task_types[int(task_of_instance.split('task')[1])]
+            #print(task_type)
+            #print(test_X)
+            #print(test_Y)
+            #print(task_labels)
             if verbose:
                 if i%100==0:
                     sys.stderr.write('%s'%i)
                 elif i%10==0:
                     sys.stderr.write('.')
 
-            task_type = self.task_types[int(task_of_instance.split('task')[1])]
             if task_type == 'mri':
               predicted_tag_indices = self.predict_mri(word_indices, word_char_indices, [], task_of_instance) # this calls with default: train=False
             else:
               output = self.predict(word_indices, word_char_indices, task_of_instance) # TODO(kk): adapt this for MRI
               predicted_tag_indices = [np.argmax(o.value()) for o in output]  # logprobs to indices
 
+            #print('Prediction:')
+            #print(predicted_tag_indices)
+            #print('Real:')
+            #print(gold_tag_indices)
+            #exit()
             for k in range(len(word_char_indices)):
               if u'*'.join([str(w) for w in word_char_indices[k]] + [str(gold_tag_indices[k])]) not in all_words and task_type != 'mri':
                 all_words.add(u'*'.join([str(w) for w in word_char_indices[k]] + [str(gold_tag_indices[k])]))
@@ -809,8 +877,12 @@ class NNTagger(object):
                 seems_good = True
                 for i in range(len(predicted_tag_indices)):
                   if gold_tag_indices[0][i] != predicted_tag_indices[i]:
-                    seems_good == False
+                    seems_good = False
               if seems_good:
+                #print('Prediction:')
+                #print(predicted_tag_indices)
+                #print('Real:')
+                #print(gold_tag_indices)
                 correct += 1
             else:
               correct += sum([1 for (predicted, gold) in zip(predicted_tag_indices, gold_tag_indices) if predicted == gold])
@@ -827,7 +899,12 @@ class NNTagger(object):
                 #print(conf_matrix)
             #print(conf_matrix)
             #exit()
-        return correct, total, total_per_token / len(all_words), conf_matrix, i2t
+        if len(all_words) == 0:
+          relative = 0
+        else: 
+          relative = total_per_token / total
+        return correct, total, relative, conf_matrix, i2t
+        #return correct, total, total_per_token / len(all_words), conf_matrix, i2t
 
 
     def get_train_data(self, list_folders_name, autoencoding=0):
@@ -872,20 +949,26 @@ class NNTagger(object):
                 task2tag2idx[task_id] = {}
             # Start and end of word symbol for output of mri.
             if task_type == 'mri':
-              task2tag2idx[task_id]["<w>"] = 0
-              task2tag2idx[task_id]["</w>"] = 1
+              for char, index in c2i.items():
+                task2tag2idx[task_id][char] = index
             for instance_idx, (words, tags) in enumerate(read_any_data_file(folder_name, autoencoding=autoencoding)):
-                #print('orig words:')
-                #print(words)
-                #print('orig tags:')
-                #print(tags)
-
+                #if task_type == 'mri':
+                #  print('orig words:')
+                #  print(words)
+                #  print('orig tags:')
+                #  print(tags)
+                
                 num_sentences += 1
                 instance_word_indices = [] #sequence of word indices
                 instance_char_indices = [] #sequence of char indices 
                 instance_tags_indices = [] #sequence of tag indices
 
                 for i, (word, tag) in enumerate(zip(words, tags)):
+                    #if task_type == 'mri':
+                    #  print('')
+                    #  print(word)
+                    #  print(tag)
+                      #exit()
                     num_tokens += 1
 
                     # map words and tags to indices
@@ -896,6 +979,8 @@ class NNTagger(object):
                         for char in word:
                             if char not in c2i:
                                 c2i[char] = len(c2i)
+                                if task_type == 'mri':
+                                  task2tag2idx[task_id][char]=len(task2tag2idx[task_id])
                             chars_of_word.append(c2i[char])
                         chars_of_word.append(c2i["</w>"])
                         instance_char_indices.append(chars_of_word)
@@ -911,6 +996,8 @@ class NNTagger(object):
                       for subtag in tag:
                         if subtag not in task2tag2idx[task_id]:
                           task2tag2idx[task_id][subtag]=len(task2tag2idx[task_id])
+                          c2i[subtag] = len(c2i)
+                          #print('ERROR: found a weird output char')
                         subtags_of_tag.append(task2tag2idx[task_id].get(subtag))
                       subtags_of_tag.append(task2tag2idx[task_id]["</w>"])
                       instance_tags_indices.append(subtags_of_tag)
@@ -921,13 +1008,13 @@ class NNTagger(object):
                       instance_tags_indices.append(task2tag2idx[task_id].get(tag))
 
                 X.append((instance_word_indices, instance_char_indices)) # list of word indices, for every word list of char indices
-                #print('words:')
-                #print(instance_word_indices)
-                #print('chars:')
-                #print(instance_char_indices)
-                #print('tags:')
-                #print(instance_tags_indices)
-                #exit()
+                #if task_type == 'mri':
+                #  print('words:')
+                #  print(instance_word_indices)
+                #  print('chars:')
+                #  print(instance_char_indices)
+                #  print('tags:')
+                #  print(instance_tags_indices)
                 
                 Y.append(instance_tags_indices)
                 task_labels.append(task_id)
@@ -939,7 +1026,12 @@ class NNTagger(object):
             print("%s sentences %s tokens" % (num_sentences, num_tokens), file=sys.stderr)
             print("%s w features, %s c features " % (len(w2i),len(c2i)), file=sys.stderr)
         
-        #exit()
+        if task_type == 'mri':
+          assert len(c2i) == len(task2tag2idx[task_id])
+          for char, index in task2tag2idx[task_id].items():
+              assert index == c2i[char]
+          #print('all good')
+          #exit()
         assert(len(X)==len(Y))
         return X, Y, task_labels, w2i, c2i, task2tag2idx  #sequence of features, sequence of labels, necessary mappings
 

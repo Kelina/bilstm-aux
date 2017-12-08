@@ -73,12 +73,17 @@ class Decoder(SequencePredictor):
         bias = dynet.parameter(self.b)
         s = s0
         loss = []
-        for char,next_char in zip(sequence,sequence[1:]):
+        sequence = [c for c in sequence]
+        for char,next_char in zip(sequence[:-1],sequence[1:]):
+            #print('chars:')
+            #print(char)
+            #print(next_char)
+
             s = s.add_input(dynet.concatenate([cembeds[char], initial_s]))
             #s = s.add_input(cembeds[char])
             probs = dynet.softmax(R*s.output() + bias)
             loss.append( -dynet.log(dynet.pick(probs,next_char)) )
-        loss = dynet.esum(loss)
+        loss = (dynet.esum(loss) / (len(sequence) - 1))  # TODO(kk): undo this if it's wrong 
         return loss
 
     def generate(self, initial_s, cembeds, max_symbols=100):
@@ -96,15 +101,15 @@ class Decoder(SequencePredictor):
         R = dynet.parameter(self.R)
         bias = dynet.parameter(self.b)
         
-        s = s0.add_input(dynet.concatenate([cembeds[0], initial_s])) # 1 = idx of start of sequence symbol
+        s = s0.add_input(dynet.concatenate([cembeds[1], initial_s])) # 1 = idx of start of sequence symbol
         #s = s0.add_input(cembeds[0]) # 1 = idx of start of sequence symbol
-        out=[0]
+        out=[1]
         while True:
             probs = dynet.softmax(R*s.output() + bias)
             probs = probs.vec_value()
             next_char = sample(probs)
             out.append(next_char)
-            if out[-1] == 1 or len(out) == max_symbols: # 2 = idx of end of sequence symbol
+            if out[-1] == 2 or len(out) == max_symbols: # 2 = idx of end of sequence symbol
                 break 
             s = s.add_input(dynet.concatenate([cembeds[next_char], initial_s]))
             #s = s.add_input(cembeds[next_char])

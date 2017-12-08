@@ -122,7 +122,6 @@ def read_any_data_file(file_name, raw=False, autoencoding=0):
         lemma = u'@'.join(lemma.split(u' ')) # use this line for lemmatization
         #lemma = u'@'.join(form.split(u' ')) # use this line for autoencoding
         form = u'@'.join(form.split(u' '))        
-
         if autoencoding == 1:
           form = lemma
           tag = "AE"
@@ -134,6 +133,7 @@ def read_any_data_file(file_name, raw=False, autoencoding=0):
         for subtag in subtags:
           current_words.append(u'OUT=' + subtag)
         current_words += list(lemma)
+        current_words = [current_words]
         current_tags = [list(form)]
         yield (current_words, current_tags)
 
