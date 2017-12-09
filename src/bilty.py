@@ -115,6 +115,7 @@ def main():
     parser.add_argument("--builder", help="RNN builder (default: lstmc)", choices=BUILDERS.keys(), default="lstmc")
 
     parser.add_argument("--autoencoding", help="0: reinflection, 1: autoencoding", default=0, type=int)
+    parser.add_argument("--print-examples", help="if True print examples during training", default=False)
     args = parser.parse_args()
 
     if args.train:
@@ -134,6 +135,9 @@ def main():
 
     if args.char_dropout_rate:
           print(">>> using char dropout rate: {} <<< ".format(args.char_dropout_rate), file=sys.stderr)
+
+    if args.print_examples:
+        print(">>> Will print examples during training <<< ", file=sys.stderr)
 
     if args.c_in_dim == 0:
         print(">>> disable character embeddings <<<", file=sys.stderr)
@@ -184,7 +188,8 @@ def main():
     if args.train and len( args.train ) != 0:
         tagger.fit(args.train, args.iters, args.trainer,
                    dev=args.dev, word_dropout_rate=args.word_dropout_rate, char_dropout_rate=args.char_dropout_rate,
-                   model_path=args.save, patience=args.patience, minibatch_size=args.minibatch_size, autoencoding=args.autoencoding, print_loss=print_loss)
+                   model_path=args.save, patience=args.patience, minibatch_size=args.minibatch_size, autoencoding=args.autoencoding, print_loss=print_loss,
+                   print_examples=args.print_examples)
         if args.save:
             save(tagger, args.save)
 
@@ -343,7 +348,7 @@ class NNTagger(object):
         self.w2i = w2i
         self.c2i = c2i
 
-    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, char_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0, autoencoding=0, print_loss=False):
+    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, char_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0, autoencoding=0, print_loss=False, print_examples=False):
         """
         train the tagger
         """
@@ -418,6 +423,8 @@ class NNTagger(object):
         
         for iter in range(num_iterations):
 
+            examples_counter = 0  # in order to print a certain max. number of examples only
+
             total_loss=0.0
             total_tagged=0.0
             random.shuffle(train_data)
@@ -436,7 +443,7 @@ class NNTagger(object):
                     char_indices = [[self.c2i["_UNK"] if
                                     (random.random() < char_dropout_rate) else c for c in char_indices_row] for char_indices_row in char_indices]
                     #print(char_indices)
-
+     
                 if minibatch_size > 1:
                     # accumulate instances for minibatch update
                     if self.task_types[int(task_of_instance.split('task')[1])] == 'mri':
@@ -482,6 +489,16 @@ class NNTagger(object):
 
                     loss1.backward()
                     trainer.update()
+
+                if print_examples and examples_counter < 5 and random.random() < 0.1 and len(batch) > 0:
+                    print('\t' + self.task_types[int(task_of_instance.split('task')[1])])
+                    print('\tExample ' + str(examples_counter) + ' (iteration ' + str(iter) + '): \n\tWord indices: ' + str(word_indices) + '\n\tChar indices: ' + str(char_indices) + '\n\tGold solution: ' + str(y))
+                    if self.task_types[int(task_of_instance.split('task')[1])] == 'mri':
+                        output = self.predict_mri(word_indices, char_indices, y, task_of_instance, train=False)
+                    else:
+                        output = [np.argmax(o.value()) for o in output]
+                    print('\tPrediction: ' + str(output) + '\n')
+                    examples_counter += 1
 
             for task_id in sorted(losses):
               losses[task_id][-1] = float(losses[task_id][-1][0]) / losses[task_id][-1][1] 
