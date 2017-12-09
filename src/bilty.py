@@ -97,6 +97,7 @@ def main():
     parser.add_argument("--learning-rate", help="learning rate [0: use default]", default=0, type=float) # see: http://dynet.readthedocs.io/en/latest/optimizers.html
     parser.add_argument("--patience", help="patience [default: -1=not used], requires specification of a dev set with --dev", required=False, default=-1, type=int)
     parser.add_argument("--word-dropout-rate", help="word dropout rate [default: 0.25], if 0=disabled, recommended: 0.25 (Kipperwasser & Goldberg, 2016)", required=False, default=0.25, type=float)
+    parser.add_argument("--char-dropout-rate", help="char dropout rate [default: 0.00], if 0=disabled, recommended: 0.25 (bc. of word dropout rate)", required=False, default=0.0, type=float)
     parser.add_argument("--task_types", nargs='*', help="the types of the tasks [original or POS]", required=False, default=['original', 'mri']) 
 
     parser.add_argument("--dynet-seed", help="random seed for dynet (needs to be first argument!)", required=False, type=int)
@@ -130,6 +131,9 @@ def main():
         print(">>> using seed: {} <<< ".format(args.dynet_seed), file=sys.stderr)
         np.random.seed(args.dynet_seed)
         random.seed(args.dynet_seed)
+
+    if args.char_dropout_rate:
+          print(">>> using char dropout rate: {} <<< ".format(args.char_dropout_rate), file=sys.stderr)
 
     if args.c_in_dim == 0:
         print(">>> disable character embeddings <<<", file=sys.stderr)
@@ -179,7 +183,7 @@ def main():
 
     if args.train and len( args.train ) != 0:
         tagger.fit(args.train, args.iters, args.trainer,
-                   dev=args.dev, word_dropout_rate=args.word_dropout_rate,
+                   dev=args.dev, word_dropout_rate=args.word_dropout_rate, char_dropout_rate=args.char_dropout_rate,
                    model_path=args.save, patience=args.patience, minibatch_size=args.minibatch_size, autoencoding=args.autoencoding, print_loss=print_loss)
         if args.save:
             save(tagger, args.save)
@@ -339,7 +343,7 @@ class NNTagger(object):
         self.w2i = w2i
         self.c2i = c2i
 
-    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0, autoencoding=0, print_loss=False):
+    def fit(self, list_folders_name, num_iterations, learning_algo, learning_rate=0, dev=None, word_dropout_rate=0.0, char_dropout_rate=0.0, model_path=None, patience=0, minibatch_size=0, autoencoding=0, print_loss=False):
         """
         train the tagger
         """
@@ -426,6 +430,12 @@ class NNTagger(object):
                     word_indices = [self.w2i["_UNK"] if
                                         (random.random() > (widCount.get(w)/(word_dropout_rate+widCount.get(w))))
                                         else w for w in word_indices]
+                if char_dropout_rate > 0.0:
+                    #print('using char dropout rate: ' + str(char_dropout_rate))
+                    #print(char_indices)
+                    char_indices = [[self.c2i["_UNK"] if
+                                    (random.random() < char_dropout_rate) else c for c in char_indices_row] for char_indices_row in char_indices]
+                    #print(char_indices)
 
                 if minibatch_size > 1:
                     # accumulate instances for minibatch update
